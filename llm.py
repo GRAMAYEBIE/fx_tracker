@@ -155,17 +155,19 @@ Write the DESK VIEW for this morning's client brief, in professional, confident 
 Rules:
 - 2 to 3 short sentences, max 70 words.
 - DO NOT write any digits or numbers at all (not even "ten-year" written as digits, dates or tenors). The figures are already shown above your text; refer to moves qualitatively (e.g. "firmer dollar", "gold under pressure").
-- How to read the facts: "USD/GHS higher" means the CEDI IS WEAKER; "USD/GHS lower" means the CEDI IS STRONGER.
+- The facts are already interpreted for you — trust them, do not re-derive cause and effect.
   Magnitude words: "slightly" = small move, "sharply" = unusually large move for that market.
-- "CEDI TODAY" is the headline and must lead your first sentence. Global drivers (dollar index, gold, oil, cocoa, yields) are context only:
-  if they point the other way, say so explicitly (e.g. "despite a softer global dollar") — never contradict the cedi's actual move.
+- Open with the cedi's move this morning, in natural words (e.g. "The cedi weakened sharply against the dollar this morning").
+- Explain it only with the "drivers that explain the cedi move". Drivers listed as going AGAINST the move must be
+  introduced with "despite" or "although" — never say the move is "in line with" or "driven by" them.
+- Write client-ready prose: NEVER copy the fact keys, labels, colons, arrows or tickers (no "CEDI TODAY:", no "USD/GHS", no "DXY").
 - Focus on what it means for the cedi and for clients: importers (buy USD), exporters (sell USD), investors (T-bills).
 - End with one clear, actionable suggestion for clients that is consistent with the cedi's move.
 - No disclaimers, no headings, no bullet points."""
 
 
 def desk_view(facts: dict, headlines: list[str], model: str | None = None) -> str:
-    user = ("MARKET FACTS (direction words only):\n" + json.dumps(facts, indent=1) +
+    user = ("MARKET FACTS (already interpreted for the cedi):\n" + json.dumps(facts, indent=1, ensure_ascii=False) +
             "\n\nTOP HEADLINES:\n" + "\n".join(f"- {h}" for h in headlines[:8]))
     text = chat(DESK_SYSTEM, user, model=model)
     text = re.sub(r"\s+", " ", text).strip().strip('"')

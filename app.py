@@ -243,6 +243,43 @@ def cedi_word(snap, daily) -> str:
     return "flat" if w == "flat" else w.replace("higher", "weaker").replace("lower", "stronger")
 
 
+# how each driver normally affects the cedi: +1 = a rise weighs on the cedi, -1 = a rise supports it
+CEDI_DRIVERS = {
+    "DXY (Dollar Index)": ("the global dollar", +1),
+    "Gold ($/oz)": ("gold, Ghana's top export", -1),
+    "Cocoa ($/t)": ("cocoa, a key export", -1),
+    "Brent ($/bbl)": ("oil, a big part of the import bill", +1),
+    "US 10Y yield (%)": ("US Treasury yields", +1),
+}
+
+
+def desk_facts(snap, daily, n_idx: float, bias: dict | None) -> dict:
+    """Pre-digested facts for the AI: the code decides what supports or hurts the cedi, the AI only writes."""
+    cedi = cedi_word(snap, daily)
+    cedi_sign = 0 if cedi == "flat" else (+1 if "weaker" in cedi else -1)   # +1 = cedi weaker
+    drivers, along, against = {}, [], []
+    for name, (label, sign) in CEDI_DRIVERS.items():
+        w = direction_word(snap, name, daily)
+        if w == "flat":
+            drivers[label] = "flat, no effect"
+            continue
+        effect = sign * (1 if "higher" in w else -1)          # +1 = pressure on the cedi
+        drivers[label] = f"{w}, which normally {'weighs on' if effect > 0 else 'supports'} the cedi"
+        if cedi_sign:
+            (along if effect == cedi_sign else against).append(label)
+    facts = {
+        "cedi this morning": "flat against the dollar" if cedi == "flat" else f"{cedi} against the dollar",
+        "global drivers": drivers,
+        "drivers that explain the cedi move": along or ["none — the move is local (FX demand / liquidity)"],
+        "drivers going AGAINST the cedi move (mention with 'despite' or 'although')": against or ["none"],
+        "news flow": ("negative for the cedi" if n_idx > 0.3 else
+                      "supportive for the cedi" if n_idx < -0.3 else "neutral"),
+    }
+    if bias:   # plain words only, e.g. "Cedi under pressure" (no emoji / ticker for the AI to copy)
+        facts["short-term model bias"] = bias["label"].split(" (")[0].lstrip("🔴🟢🟡 ").strip()
+    return facts
+
+
 def snapshot(daily: pd.DataFrame, intraday: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for name in list(ASSETS) + list(GHS_DERIVED):
@@ -531,14 +568,7 @@ def dashboard():
         suggestion, src = auto_desk_view(snap), "rules"
         if use_llm:
             import json
-            facts = {"CEDI TODAY": cedi_word(snap, daily)}
-            facts.update({n: direction_word(snap, n, daily) for n in
-                          ["USD/GHS (market)", "DXY (Dollar Index)", "EUR/USD", "Gold ($/oz)",
-                           "Brent ($/bbl)", "Cocoa ($/t)", "US 10Y yield (%)"]})
-            facts["news pressure on cedi"] = ("negative" if n_idx > 0.3 else
-                                              "supportive" if n_idx < -0.3 else "neutral")
-            if bias:
-                facts["model bias"] = bias["label"]
+            facts = desk_facts(snap, daily, n_idx, bias)
             top = tuple(news_df.sort_values("weight", ascending=False)["title"].head(8)) if len(news_df) else ()
             try:
                 suggestion = llm_desk_view(json.dumps(facts), top, qwen_model)
