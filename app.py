@@ -354,11 +354,12 @@ with st.sidebar:
     st.header("Settings")
     corr_window = st.slider("Correlation window (days)", 20, 250, 60)
     st.divider()
-    st.subheader("🤖 Qwen (local AI)")
+    where = "Ollama Cloud" if llm.IS_CLOUD else "local Ollama"
+    st.subheader(f"🤖 AI ({where})")
     ollama_ok = llm.ollama_available()
-    use_llm = st.toggle("Use Qwen for desk view & news scoring", value=ollama_ok, disabled=not ollama_ok)
+    use_llm = st.toggle("Use AI for desk view & news scoring", value=ollama_ok, disabled=not ollama_ok)
     qwen_model = st.text_input("Ollama model", llm.DEFAULT_MODEL)
-    st.caption("✅ Ollama running" if ollama_ok else "⚠ Ollama not running — rule-based fallback in use")
+    st.caption(f"✅ {where} reachable" if ollama_ok else f"⚠ {where} unreachable — rule-based fallback in use")
     if st.button("🔄 Refresh all data now"):
         st.cache_data.clear()
     st.caption("API key (optional): .streamlit/secrets.toml → ALLRATES_API_KEY")
@@ -494,7 +495,7 @@ def dashboard():
             top = tuple(news_df.sort_values("weight", ascending=False)["title"].head(8)) if len(news_df) else ()
             try:
                 suggestion = llm_desk_view(json.dumps(facts), top, qwen_model)
-                src = f"Qwen ({qwen_model})"
+                src = f"AI ({qwen_model})"
             except Exception as e:
                 st.caption(f"Qwen unavailable ({e}) — rule-based view used.")
         desk = st.text_area(f"🎯 Desk view — drafted by {src} (edit before sending)",

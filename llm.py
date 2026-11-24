@@ -1,23 +1,47 @@
 """
-Local LLM helpers (Ollama + Qwen). Everything runs on your own machine.
+LLM helpers via the Ollama API — local Ollama or Ollama Cloud.
 
-Setup once:
+Local (default, nothing to configure):
     1. Install Ollama: https://ollama.com
     2. ollama pull qwen2.5:7b        (or qwen2.5:3b on a smaller laptop)
-The app falls back to rule-based text automatically if Ollama is not running.
+
+Online (Streamlit Cloud) — set these in .streamlit/secrets.toml or the app's Secrets:
+    OLLAMA_HOST    = "https://ollama.com"
+    OLLAMA_API_KEY = "<key from ollama.com → Settings → Keys>"
+    OLLAMA_MODEL   = "gpt-oss:20b"     # any model listed at ollama.com/search?c=cloud
+Environment variables with the same names also work.
+
+The app falls back to rule-based text automatically if Ollama is unreachable.
 """
 import json
+import os
 import re
 
 import requests
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
-DEFAULT_MODEL = "qwen2.5:7b"
 
-
-def ollama_available(timeout: float = 2.0) -> bool:
+def _setting(name: str, default: str = "") -> str:
+    """Read a setting from env vars first, then Streamlit secrets (if any)."""
+    if os.environ.get(name):
+        return os.environ[name]
     try:
-        return requests.get("http://localhost:11434/api/tags", timeout=timeout).ok
+        import streamlit as st
+        return str(st.secrets.get(name, default))
+    except Exception:          # no secrets file / not running under Streamlit
+        return default
+
+
+OLLAMA_HOST = _setting("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+OLLAMA_API_KEY = _setting("OLLAMA_API_KEY")
+OLLAMA_URL = f"{OLLAMA_HOST}/api/chat"
+DEFAULT_MODEL = _setting("OLLAMA_MODEL", "qwen2.5:7b")
+IS_CLOUD = "localhost" not in OLLAMA_HOST and "127.0.0.1" not in OLLAMA_HOST
+HEADERS = {"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {}
+
+
+def ollama_available(timeout: float = 5.0) -> bool:
+    try:
+        return requests.get(f"{OLLAMA_HOST}/api/tags", headers=HEADERS, timeout=timeout).ok
     except Exception:
         return False
 
@@ -32,7 +56,7 @@ def chat(system: str, user: str, model: str = DEFAULT_MODEL, json_mode: bool = F
     }
     if json_mode:
         body["format"] = "json"
-    r = requests.post(OLLAMA_URL, json=body, timeout=timeout)
+    r = requests.post(OLLAMA_URL, json=body, headers=HEADERS, timeout=timeout)
     r.raise_for_status()
     return r.json()["message"]["content"].strip()
 

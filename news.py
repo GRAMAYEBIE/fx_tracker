@@ -71,7 +71,7 @@ def score_news(df: pd.DataFrame, use_llm: bool, model: str = llm.DEFAULT_MODEL) 
     if use_llm:
         try:
             scores = llm.score_headlines(df["title"].tolist(), model=model)
-            method = f"Qwen ({model})"
+            method = f"AI ({model})"
         except Exception:
             scores = None
     if scores is None:

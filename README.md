@@ -16,6 +16,17 @@ ollama serve            # only if Ollama is not already running
 streamlit run app.py
 ```
 
+## Deploy online (Streamlit Community Cloud + Ollama Cloud)
+Local Ollama is not available on Streamlit Cloud, so the app can use Ollama Cloud instead
+(same API). In the app's **Settings → Secrets** add:
+```toml
+OLLAMA_HOST    = "https://ollama.com"
+OLLAMA_API_KEY = "your key from ollama.com → Settings → Keys"
+OLLAMA_MODEL   = "gpt-oss:20b"   # any model from ollama.com/search?c=cloud
+```
+Without these secrets the app uses local Ollama (`localhost:11434`), and falls back to
+rule-based text if no Ollama is reachable.
+
 ## Files
 | File | Role |
 |---|---|
