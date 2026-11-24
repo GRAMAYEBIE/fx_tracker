@@ -63,7 +63,8 @@ def fetch_news(max_per_feed: int = 8) -> pd.DataFrame:
     return df
 
 
-def score_news(df: pd.DataFrame, use_llm: bool, model: str = llm.DEFAULT_MODEL) -> tuple[pd.DataFrame, str]:
+def score_news(df: pd.DataFrame, use_llm: bool, model: str | None = None) -> tuple[pd.DataFrame, str]:
+    model = model or llm.default_model()
     if df.empty:
         return df, "none"
     method = "keywords"
