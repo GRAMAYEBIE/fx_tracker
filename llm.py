@@ -1,17 +1,18 @@
 """
-LLM helpers via the Ollama API — local Ollama or Ollama Cloud.
+LLM helpers — two backends, chosen by settings:
 
-Local (default, nothing to configure):
-    1. Install Ollama: https://ollama.com
-    2. ollama pull qwen2.5:7b        (or qwen2.5:3b on a smaller laptop)
+1. OpenAI-compatible API (Groq, OpenRouter, Gemini, …) — used when LLM_BASE_URL is set.
+   Streamlit Cloud → Settings → Secrets (or .streamlit/secrets.toml):
+       LLM_BASE_URL = "https://api.groq.com/openai/v1"
+       LLM_API_KEY  = "gsk_..."                 # console.groq.com → API Keys
+       LLM_MODEL    = "openai/gpt-oss-20b"      # any id from GET {LLM_BASE_URL}/models
 
-Online (Streamlit Cloud) — set these in .streamlit/secrets.toml or the app's Secrets:
-    OLLAMA_HOST    = "https://ollama.com"
-    OLLAMA_API_KEY = "<key from ollama.com → Settings → Keys>"
-    OLLAMA_MODEL   = "gpt-oss:20b"     # any model listed at ollama.com/search?c=cloud
+2. Ollama (default when LLM_BASE_URL is not set):
+   Local, nothing to configure:  install https://ollama.com, then `ollama pull qwen2.5:7b`
+   Ollama Cloud (paid):          OLLAMA_HOST = "https://ollama.com", OLLAMA_API_KEY, OLLAMA_MODEL
+
 Environment variables with the same names also work.
-
-The app falls back to rule-based text automatically if Ollama is unreachable.
+The app falls back to rule-based text automatically if the AI is unreachable.
 """
 import json
 import os
@@ -22,6 +23,7 @@ import requests
 
 LOCAL_HOST = "http://localhost:11434"
 LOCAL_MODEL = "qwen2.5:7b"
+OPENAI_DEFAULT_MODEL = "openai/gpt-oss-20b"
 
 
 def _setting(name: str, default: str = "") -> str:
@@ -41,22 +43,46 @@ def _setting(name: str, default: str = "") -> str:
     return val or default
 
 
+def openai_base() -> str:
+    """Base URL of an OpenAI-compatible API, or '' to use Ollama."""
+    return _setting("LLM_BASE_URL").rstrip("/")
+
+
+def is_openai() -> bool:
+    return bool(openai_base())
+
+
 def host() -> str:
     return _setting("OLLAMA_HOST", LOCAL_HOST).rstrip("/")
 
 
 def api_key() -> str:
-    key = _setting("OLLAMA_API_KEY")
+    key = _setting("LLM_API_KEY") if is_openai() else _setting("OLLAMA_API_KEY")
     return key[7:].strip() if key.lower().startswith("bearer ") else key
 
 
 def default_model() -> str:
+    if is_openai():
+        return _setting("LLM_MODEL", OPENAI_DEFAULT_MODEL)
     return _setting("OLLAMA_MODEL", LOCAL_MODEL)
 
 
 def is_cloud() -> bool:
+    if is_openai():
+        return True
     h = host()
     return "localhost" not in h and "127.0.0.1" not in h
+
+
+def provider_name() -> str:
+    if is_openai():
+        base = openai_base().lower()
+        for k, name in (("groq", "Groq"), ("openrouter", "OpenRouter"), ("googleapis", "Gemini"),
+                        ("openai.com", "OpenAI"), ("ollama.com", "Ollama Cloud")):
+            if k in base:
+                return name
+        return "OpenAI-compatible API"
+    return "Ollama Cloud" if is_cloud() else "local Ollama"
 
 
 def _headers() -> dict:
@@ -64,35 +90,63 @@ def _headers() -> dict:
     return {"Authorization": f"Bearer {key}"} if key else {}
 
 
-def ollama_available(timeout: float = 5.0) -> bool:
+def available(timeout: float = 5.0) -> bool:
+    """True if the AI backend answers (for OpenAI-compatible APIs this also validates the key)."""
     if is_cloud() and not api_key():
         return False
+    url = f"{openai_base()}/models" if is_openai() else f"{host()}/api/tags"
     try:
-        return requests.get(f"{host()}/api/tags", headers=_headers(), timeout=timeout).ok
+        return requests.get(url, headers=_headers(), timeout=timeout).ok
     except Exception:
         return False
 
 
+ollama_available = available     # backward-compatible name
+
+
+def _raise_for(r: requests.Response) -> None:
+    who = provider_name()
+    if r.status_code in (401, 403):
+        var = "LLM_API_KEY" if is_openai() else "OLLAMA_API_KEY"
+        raise RuntimeError(f"{who} HTTP {r.status_code}: API key rejected — check {var} in Secrets "
+                           "(no spaces, no quotes inside, key still active)")
+    if r.status_code == 429:
+        raise RuntimeError(f"{who} HTTP 429: free-tier rate limit reached — try again in a minute")
+    if not r.ok:
+        raise RuntimeError(f"{who} HTTP {r.status_code}: {r.text[:200]}")
+
+
+def _clean(text: str) -> str:
+    text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip()   # reasoning models
+    if not text:
+        raise RuntimeError("model returned an empty answer")
+    return text
+
+
 def chat(system: str, user: str, model: str | None = None, json_mode: bool = False,
          temperature: float = 0.3, timeout: int = 120) -> str:
-    body = {
-        "model": model or default_model(),
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        "stream": False,
-        "options": {"temperature": temperature},
-    }
+    model = model or default_model()
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+    if is_openai():
+        body = {"model": model, "messages": messages, "temperature": temperature}
+        if json_mode:
+            body["response_format"] = {"type": "json_object"}
+        url = f"{openai_base()}/chat/completions"
+        r = requests.post(url, json=body, headers=_headers(), timeout=timeout)
+        if json_mode and r.status_code == 400:      # model without JSON mode → plain request
+            body.pop("response_format")
+            r = requests.post(url, json=body, headers=_headers(), timeout=timeout)
+        _raise_for(r)
+        choices = r.json().get("choices") or [{}]
+        return _clean((choices[0].get("message") or {}).get("content", ""))
+
+    body = {"model": model, "messages": messages, "stream": False, "options": {"temperature": temperature}}
     if json_mode:
         body["format"] = "json"
     r = requests.post(f"{host()}/api/chat", json=body, headers=_headers(), timeout=timeout)
-    if r.status_code in (401, 403):
-        raise RuntimeError(f"Ollama HTTP {r.status_code}: API key rejected — check OLLAMA_API_KEY in Secrets "
-                           "(no spaces, no quotes inside, key still active on ollama.com)")
-    if not r.ok:
-        raise RuntimeError(f"Ollama HTTP {r.status_code}: {r.text[:200]}")
-    content = (r.json().get("message") or {}).get("content", "").strip()
-    if not content:
-        raise RuntimeError("model returned an empty answer")
-    return content
+    _raise_for(r)
+    return _clean((r.json().get("message") or {}).get("content", ""))
 
 
 # ---------------------------------------------------------------- desk view
@@ -129,7 +183,7 @@ For each headline, estimate its likely impact on USD/GHS today.
 impact: integer from -2 to +2
    +2 = strongly pushes USD/GHS UP (cedi weaker), -2 = strongly pushes USD/GHS DOWN (cedi stronger), 0 = no effect.
 relevance: integer 0 to 3 (3 = directly about the cedi / Bank of Ghana / Ghana FX; 0 = irrelevant).
-Return JSON only: {"scores": [{"i": <index>, "impact": <int>, "relevance": <int>}, ...]}"""
+Return json only: {"scores": [{"i": <index>, "impact": <int>, "relevance": <int>}, ...]}"""
 
 
 def score_headlines(headlines: list[str], model: str | None = None) -> list[dict]:

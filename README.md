@@ -16,16 +16,18 @@ ollama serve            # only if Ollama is not already running
 streamlit run app.py
 ```
 
-## Deploy online (Streamlit Community Cloud + Ollama Cloud)
-Local Ollama is not available on Streamlit Cloud, so the app can use Ollama Cloud instead
-(same API). In the app's **Settings → Secrets** add:
+## Deploy online (Streamlit Community Cloud + Groq, free tier)
+Local Ollama is not available on Streamlit Cloud, so online the app uses any
+OpenAI-compatible API — Groq by default. Create a key at https://console.groq.com/keys,
+then in the app's **Settings → Secrets** add:
 ```toml
-OLLAMA_HOST    = "https://ollama.com"
-OLLAMA_API_KEY = "your key from ollama.com → Settings → Keys"
-OLLAMA_MODEL   = "gpt-oss:20b"   # any model from ollama.com/search?c=cloud
+LLM_BASE_URL = "https://api.groq.com/openai/v1"
+LLM_API_KEY  = "gsk_..."
+LLM_MODEL    = "openai/gpt-oss-20b"   # any id from https://api.groq.com/openai/v1/models
 ```
-Without these secrets the app uses local Ollama (`localhost:11434`), and falls back to
-rule-based text if no Ollama is reachable.
+Without `LLM_BASE_URL` the app uses local Ollama (`localhost:11434`), or Ollama Cloud if
+`OLLAMA_HOST` / `OLLAMA_API_KEY` / `OLLAMA_MODEL` are set (paid). It falls back to
+rule-based text if no AI is reachable.
 
 ## Files
 | File | Role |

@@ -389,13 +389,14 @@ with st.sidebar:
     corr_window = st.slider("Correlation window (days)", 20, 250, 60)
     st.divider()
     cloud = llm.is_cloud()
-    where = "Ollama Cloud" if cloud else "local Ollama"
+    where = llm.provider_name()
     st.subheader(f"🤖 AI ({where})")
-    ollama_ok = llm.ollama_available()
+    ollama_ok = llm.available()
     use_llm = st.toggle("Use AI for desk view & news scoring", value=ollama_ok, disabled=not ollama_ok)
-    qwen_model = st.text_input("Ollama model", llm.default_model())
+    qwen_model = st.text_input("AI model", llm.default_model())
     if cloud:
-        st.caption("🔑 API key: set" if llm.api_key() else "🔑 API key: **missing** — add OLLAMA_API_KEY in Secrets")
+        key_var = "LLM_API_KEY" if llm.is_openai() else "OLLAMA_API_KEY"
+        st.caption("🔑 API key: set" if llm.api_key() else f"🔑 API key: **missing** — add {key_var} in Secrets")
     st.caption(f"✅ {where} reachable" if ollama_ok else f"⚠ {where} unreachable — rule-based fallback in use")
     if st.button("🔄 Refresh all data now"):
         st.cache_data.clear()
