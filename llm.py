@@ -57,8 +57,12 @@ def chat(system: str, user: str, model: str = DEFAULT_MODEL, json_mode: bool = F
     if json_mode:
         body["format"] = "json"
     r = requests.post(OLLAMA_URL, json=body, headers=HEADERS, timeout=timeout)
-    r.raise_for_status()
-    return r.json()["message"]["content"].strip()
+    if not r.ok:
+        raise RuntimeError(f"Ollama HTTP {r.status_code}: {r.text[:200]}")
+    content = (r.json().get("message") or {}).get("content", "").strip()
+    if not content:
+        raise RuntimeError("model returned an empty answer")
+    return content
 
 
 # ---------------------------------------------------------------- desk view
@@ -66,9 +70,13 @@ DESK_SYSTEM = """You are a senior FX & fixed-income sales trader on a corporate 
 Write the DESK VIEW for this morning's client brief, in professional, confident English.
 Rules:
 - 2 to 3 short sentences, max 70 words.
-- DO NOT write any digits or numbers at all. The figures are already shown above your text; refer to moves qualitatively (e.g. "firmer dollar", "gold under pressure").
+- DO NOT write any digits or numbers at all (not even "ten-year" written as digits, dates or tenors). The figures are already shown above your text; refer to moves qualitatively (e.g. "firmer dollar", "gold under pressure").
+- How to read the facts: "USD/GHS higher" means the CEDI IS WEAKER; "USD/GHS lower" means the CEDI IS STRONGER.
+  Magnitude words: "slightly" = small move, "sharply" = unusually large move for that market.
+- "CEDI TODAY" is the headline and must lead your first sentence. Global drivers (dollar index, gold, oil, cocoa, yields) are context only:
+  if they point the other way, say so explicitly (e.g. "despite a softer global dollar") — never contradict the cedi's actual move.
 - Focus on what it means for the cedi and for clients: importers (buy USD), exporters (sell USD), investors (T-bills).
-- End with one clear, actionable suggestion for clients.
+- End with one clear, actionable suggestion for clients that is consistent with the cedi's move.
 - No disclaimers, no headings, no bullet points."""
 
 
@@ -77,9 +85,12 @@ def desk_view(facts: dict, headlines: list[str], model: str = DEFAULT_MODEL) -> 
             "\n\nTOP HEADLINES:\n" + "\n".join(f"- {h}" for h in headlines[:8]))
     text = chat(DESK_SYSTEM, user, model=model)
     text = re.sub(r"\s+", " ", text).strip().strip('"')
-    if re.search(r"\d", text):          # guard: the LLM must never introduce figures
+    # guard: the LLM must never introduce figures — drop any sentence containing a digit
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    clean = [s for s in sentences if s and not re.search(r"\d", s)]
+    if not clean:
         raise ValueError("LLM output contained numbers — rejected")
-    return text
+    return " ".join(clean)
 
 
 # ---------------------------------------------------------------- news scoring
@@ -94,7 +105,8 @@ Return JSON only: {"scores": [{"i": <index>, "impact": <int>, "relevance": <int>
 def score_headlines(headlines: list[str], model: str = DEFAULT_MODEL) -> list[dict]:
     user = "\n".join(f"{i}. {h}" for i, h in enumerate(headlines))
     raw = chat(NEWS_SYSTEM, user, model=model, json_mode=True, temperature=0.0)
-    data = json.loads(raw)
+    m = re.search(r"\{.*\}", raw, re.S)          # tolerate ```json fences or extra text
+    data = json.loads(m.group(0) if m else raw)
     out = {}
     for s in data.get("scores", []):
         try:

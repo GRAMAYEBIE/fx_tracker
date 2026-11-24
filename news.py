@@ -1,7 +1,7 @@
 """
 News feed for the Ghana FX desk — Google News RSS (free, no key), local + global.
-Each headline gets an impact score on USD/GHS (+ = cedi weaker) from Qwen,
-or from a keyword fallback when Ollama is not running.
+Each headline gets an impact score on USD/GHS (+ = cedi weaker) from the AI model (Ollama),
+or from a keyword fallback when Ollama is unreachable.
 """
 from datetime import datetime, timezone
 from pathlib import Path
@@ -72,8 +72,9 @@ def score_news(df: pd.DataFrame, use_llm: bool, model: str = llm.DEFAULT_MODEL) 
         try:
             scores = llm.score_headlines(df["title"].tolist(), model=model)
             method = f"AI ({model})"
-        except Exception:
+        except Exception as e:
             scores = None
+            method = f"keywords (AI failed: {str(e)[:120]})"
     if scores is None:
         scores = [_keyword_score(t) for t in df["title"]]
     df = df.copy()

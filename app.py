@@ -9,7 +9,7 @@ Sources (all public):
   • BoG interbank rates ... AllRatesToday API (Bank of Ghana)   — BoG publishes once per business day
   • Ghana T-bills ......... treasury-bills API (BoG T-bill page) — BoG auctions once per week
 
-  • News ................. Google News RSS (Ghana + global), scored by Qwen (Ollama) — every 15 min
+  • News ................. Google News RSS (Ghana + global), scored by AI (Ollama local or cloud) — every 15 min
   • Forecast ............. logistic regression on 1y daily data + news adjustment
 
 Optional: set an AllRatesToday key in .streamlit/secrets.toml →  ALLRATES_API_KEY = "..."
@@ -213,11 +213,34 @@ def llm_desk_view(facts_json: str, headlines: tuple, model: str) -> str:
 
 
 # ================================================================ analytics
-def direction_word(snap, name) -> str:
-    v = snap.loc[name, "1D %"]
-    if v is None or pd.isna(v) or abs(v) < 0.05:
+def _pct(snap, name, col="1D %") -> float:
+    v = snap.loc[name, col] if name in snap.index else None
+    return 0.0 if v is None or pd.isna(v) else float(v)
+
+
+def direction_word(snap, name, daily: pd.DataFrame | None = None) -> str:
+    """'flat' / 'slightly higher' / 'higher' / 'sharply lower'… — size judged vs that market's usual daily move."""
+    v = _pct(snap, name)
+    if abs(v) < 0.05:
         return "flat"
-    return "higher" if v > 0 else "lower"
+    word = "higher" if v > 0 else "lower"
+    vol = None
+    if daily is not None and name in daily:
+        vol = daily[name].pct_change().tail(60).std() * 100
+    if vol is None or pd.isna(vol) or vol == 0:
+        vol = 0.5
+    z = abs(v) / vol
+    if z < 0.5:
+        return f"slightly {word}"
+    if z >= 1.5:
+        return f"sharply {word}"
+    return word
+
+
+def cedi_word(snap, daily) -> str:
+    """Translate the USD/GHS move into plain words about the cedi."""
+    w = direction_word(snap, "USD/GHS (market)", daily)
+    return "flat" if w == "flat" else w.replace("higher", "weaker").replace("lower", "stronger")
 
 
 def snapshot(daily: pd.DataFrame, intraday: pd.DataFrame) -> pd.DataFrame:
@@ -260,11 +283,22 @@ def _mv(snap, name) -> str:
 
 def auto_desk_view(snap: pd.DataFrame) -> str:
     """Rule-based starting point for the desk view — always edit before sending."""
-    dxy = snap.loc["DXY (Dollar Index)", "1D %"] or 0
-    gold = snap.loc["Gold ($/oz)", "1D %"] or 0
-    oil = snap.loc["Brent ($/bbl)", "1D %"] or 0
+    ghs = _pct(snap, "USD/GHS (market)")
+    dxy = _pct(snap, "DXY (Dollar Index)")
+    gold = _pct(snap, "Gold ($/oz)")
+    oil = _pct(snap, "Brent ($/bbl)")
     pressure = sum([dxy > 0.05, gold < -0.3, oil > 0.3])
     relief = sum([dxy < -0.05, gold > 0.3, oil < -0.3])
+    # the cedi's own move comes first — global drivers must not contradict it
+    if ghs >= 0.5:
+        return (("The cedi is weaker this morning despite a softer global dollar. " if relief >= 2 else
+                 "The cedi is under pressure this morning, weaker against the dollar and major crosses. ") +
+                "Importers with near-term USD payments should consider covering early; "
+                "exporters can take advantage by selling USD now.")
+    if ghs <= -0.5:
+        return (("The cedi is firmer this morning despite a stronger global dollar. " if pressure >= 2 else
+                 "The cedi is firmer this morning against the dollar. ") +
+                "Importers can use the strength to buy USD at better levels; exporters may prefer to hold USD for now.")
     if pressure >= 2:
         return ("Firm dollar and weaker Ghana FX inflows/higher import bill point to cedi pressure. "
                 "Importers with USD payments due may want to cover early or lock forwards.")
@@ -428,6 +462,14 @@ def dashboard():
         gap = mkt - usd["rate"]
         st.info(f"Market vs BoG gap: **{gap:+.4f} GHS** ({gap / usd['rate'] * 100:+.2f}%)")
 
+    ghs_move = _pct(snap, "USD/GHS (market)")
+    big_move_msg = None
+    if abs(ghs_move) >= 2:
+        big_move_msg = (f"⚠ USD/GHS moved {ghs_move:+.2f}% vs the previous close — unusually large for one day. "
+                        "Yahoo's GHS quote can be stale or jump; check against another source (BoG, your dealer screen) "
+                        "before sending the brief.")
+        st.warning(big_move_msg)
+
     if auto_log(snap, bog, tbills, {"news_index": round(n_idx, 3),
                                     "p_up_model": fc.get("p_up"), "p_up_adjusted": bias and bias["p"]}):
         st.toast(f"Today's snapshot saved to {LOG_FILE}")
@@ -485,9 +527,10 @@ def dashboard():
         suggestion, src = auto_desk_view(snap), "rules"
         if use_llm:
             import json
-            facts = {n: direction_word(snap, n) for n in
-                     ["USD/GHS (market)", "DXY (Dollar Index)", "EUR/USD", "Gold ($/oz)",
-                      "Brent ($/bbl)", "Cocoa ($/t)", "US 10Y yield (%)"]}
+            facts = {"CEDI TODAY": cedi_word(snap, daily)}
+            facts.update({n: direction_word(snap, n, daily) for n in
+                          ["USD/GHS (market)", "DXY (Dollar Index)", "EUR/USD", "Gold ($/oz)",
+                           "Brent ($/bbl)", "Cocoa ($/t)", "US 10Y yield (%)"]})
             facts["news pressure on cedi"] = ("negative" if n_idx > 0.3 else
                                               "supportive" if n_idx < -0.3 else "neutral")
             if bias:
@@ -497,7 +540,9 @@ def dashboard():
                 suggestion = llm_desk_view(json.dumps(facts), top, qwen_model)
                 src = f"AI ({qwen_model})"
             except Exception as e:
-                st.caption(f"Qwen unavailable ({e}) — rule-based view used.")
+                st.warning(f"AI desk view failed ({str(e)[:200]}) — rule-based view used instead.")
+        if big_move_msg:
+            st.warning(big_move_msg)
         desk = st.text_area(f"🎯 Desk view — drafted by {src} (edit before sending)",
                             value=suggestion, height=110)
         st.code(briefing(snap, bog, tbills, desk, world, bias), language=None)
